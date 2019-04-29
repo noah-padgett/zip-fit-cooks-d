@@ -1,0 +1,233 @@
+---
+title: "Zero-Inflated Data Generation"
+author: "R. Noah Padgett"
+date: "2019-04-29"
+output: html_document
+---
+
+```{r setup}
+rm(list = ls())
+set.seed(666)
+```
+
+## Data Generation from previous projects
+```{r data_gen, tidy = TRUE}
+
+# new random sample generator
+# Inputs:
+#   N = Population size
+#   alpha = proportion of nonzeros
+#   model = what pdf ( either norm or lnorm)
+#   mu = mean of nonzero
+#   stdv = standard deviation of nonzero
+#   strata = which strata is sampled
+
+sim <- function(N, alpha, non_z_model, mu, stdv, strata){
+  # Step 1:
+  # Generate N random samples from the binomial 
+  # population with the probability of success alpha
+  x <- rbinom(n = N, size = 1, prob = alpha)
+
+  # Step 2:
+  # Let m be the sum of the values generated in 
+  # step I. Here m gives the total number of 
+  # success ( say “1”) in the N random samples. 
+  # Thus there are N - m total number of failures 
+  # (say “0”).
+  m <- sum(x)
+  
+  # Step 3:
+  # Generate m non-zero random samples form the 
+  # population with specified pdf 
+  if( non_z_model == "norm"){
+    nonZ <- matrix(rnorm(m, mu, stdv), ncol = 1)
+  } else if( non_z_model == "lnorm"){
+      location <- log(mu^2 / sqrt(stdv^2 + mu^2))
+      shape <- sqrt( log( 1 + (stdv^2 / mu^2)))
+      nonZ <- matrix(rlnorm(m, location, shape), ncol = 1)
+  } else {
+      stop("You fucked up the nonzero model specification...")
+  }
+  
+  # Step 4:
+  # Combine m non-zero observations generated 
+  # in step III with N - m zero observa-tions 
+  # generated in step I.
+  Z <- matrix(rep(0, (N-m)), ncol = 1)
+  cd <- rbind(nonZ,Z)
+  
+  # Step 5:
+  # Specify which stratum
+  cdata <- cbind(rep(strata, nrow(cd)), cd)
+  
+  return(cdata)
+}# End function
+
+```
+
+
+### Now Try
+
+```{r attempt, tidy=TRUE}
+x <- sim(N = 1000, alpha = .3, non_z_model = "lnorm",
+               mu = 10, stdv = 6, strata = 1)
+y <- x[,2]
+y1=y[y>=0]
+y2=y[y>0]
+p1=hist(y1,breaks=20,freq=FALSE)
+p2=hist(y2,breaks=20,freq=FALSE)
+plot( p1, col="green",xlim=c(0,30),ylim=c(0,1000),
+      main=" ", ylab = "Frequency", xlab="y")  # first histogram
+
+plot( p2, col="blue", xlim=c(0,30),ylim=c(0,1000),
+      main=" ", ylab = "Frquency", xlab="y", add=T)  # second
+
+```
+
+
+### New, generalized method for regression
+
+```{r Reg_Gen, tidy = TRUE}
+
+# new random sample generator
+
+# Set up model
+# ==================================================== #
+# X = observed variables
+# Beta0 = regression weights for logistic model
+# Beta1 = regression wieghts for nonzero model NOTE: be careful with scale
+# non_z_model = specified probability model
+# sigma = variance, specified for normal, lognormal (should be common)
+sim_reg <- function(X, Beta0, Beta1, non_z_model, sigma=1){
+  
+  # Step 1:
+  # Generate N random samples from a bernoulli random variable
+  # based on the model specified:
+  # Remember that the mean is based on the model mu = X%*%Beta0
+  # use inverse-logit transformation to get probability
+  nBeta <- ncol(X)
+  Z0 <- X%*%Beta0
+  pr <- 1/(1+exp(-Z0))   # probability of observing a 1 for each i. 
+  x <- rbinom(n=length(pr), size = 1, prob=pr)
+  
+  # Step 2: 
+  # Next create a zeros & non-zero dataset based on the (x) variable value
+  # where the data is then subsetted to only the observations with
+  # nonzero or zero value 
+  
+  new_dat <- cbind(X,x)
+  rownames(new_dat) <- paste0("id",1:N)
+  # zero data
+  z_dat <- new_dat[new_dat[,(nBeta + 1)] == 0,1:nBeta]
+  
+  # nonzero data 
+  nonz_dat <- new_dat[new_dat[,(nBeta + 1)] == 1,1:nBeta]
+  
+  # Step 3:
+  # calculate the expected value of the nonzero component
+  Z1 <- nonz_dat%*%Beta1
+  
+  
+  # Step 4:
+  # Generate m non-zero random samples form the 
+  # population with specified pdf 
+  # where mu = X%*%Beta1 for the nonzero component
+  if( non_z_model == "Normal"){
+
+    Y <- matrix(rnorm(length(Z1), Z1, sigma), ncol = 1)
+    rownames(Y) <- rownames(Z1)
+    nonz_dat <- cbind(nonz_dat, Y)
+    
+  } else if( non_z_model == "Lognormal"){
+      
+    # For lognormal, I need to use this fun transformation
+    location <- log(Z1^2 / sqrt(sigma^2 + Z1^2))
+    shape <- sqrt( log( 1 + (sigma^2 / Z1^2)))
+    Y <- matrix(rlnorm(length(Z1), location, shape), ncol = 1)
+    row.names(Y) <- row.names(Z1)
+    nonz_dat <- cbind(nonz_dat, Y)
+  
+  } else if( non_z_model == "Poisson"){
+    
+    # Poisson requires exponentiating
+    mu <- exp(Z1)
+    Y <- matrix(rpois(n=length(Z1), lambda=mu), ncol = 1)
+    row.names(Y) <- row.names(Z1)
+    nonz_dat <- cbind(nonz_dat, Y)
+    
+  } else if( non_z_model == "Truncated_Poisson"){
+    
+    # Zero Truncated Poisson is more complicated, 
+    # but boils down to the following:
+    # I need to go back and look at my notes as to the theory
+    # behind the data generation of the truncated Poisson
+    mu <- exp(Z1)                   # pre-truncation mean of Poisson
+    U <- runif(length(Z1))          # the uniform sample
+    t <- -log(1 - U*(1 - exp(-mu))) # the "first" event-times
+    T1<-(mu - t)                    # the set of (T-t)
+
+    Y <- matrix((rpois(length(Z1),T1)+1), ncol = 1) # Get the values
+    
+    row.names(Y) <- row.names(Z1)
+    nonz_dat <- cbind(nonz_dat, Y)
+    
+  } else {
+      stop("You fucked up the nonzero model specification...")
+  }
+  
+  # Step 5:
+  # Generate the zero component in the dataset by creating a
+  # new variable called Y and set it to 0 for the zero component
+  Y <- rep(0, nrow(z_dat))
+  z_dat <- cbind(z_dat,Y)
+  
+  # Step 5:
+  # Combine the zeros dataset with the nonzeros dataset
+  # and then make some logical variable names for the output
+  data <- rbind(z_dat,nonz_dat)
+  colnames(data) <- c(paste0("X",0:(nBeta-1)),"Y")
+  
+   return(data)
+}# End function
+
+```
+
+
+```{r attempt2, tidy=TRUE}
+
+# Generate matrix of observed responses
+N <- 1000
+k <- 2
+x0 = rep(1, N)
+x1 = rnorm(N)            
+x2 = rnorm(N)
+X_obs <- matrix(cbind(x0,x1,x2), ncol=(k+1))
+# Matrix of regression weights
+b0 <- matrix(c(0, .25, -.2), ncol=1) 
+# Remember X_obs%*%B is the linear combination of predictors
+
+# Normal nonzeros
+b1 <- matrix(c(30, .25, -.05), ncol=1)
+fit <- sim_reg(X=X_obs, Beta0=b0, Beta1 = b1, 
+               non_z_model="Normal", sigma = 5)
+y <- fit[,4]
+hist(y)
+
+# Lognormal
+fit <- sim_reg(X=X_obs, Beta0=b0, Beta1 = b1, 
+               non_z_model="Lognormal", sigma = 15)
+y <- fit[,4]
+hist(y)
+
+# Poisson
+b1 <- matrix(c(1, .25, -.05), ncol=1)
+fit <- sim_reg(X=X_obs, Beta0=b0, Beta1 = b1, non_z_model="Poisson")
+y <- fit[,4]
+hist(y)
+
+# Truncated Poisson
+fit <- sim_reg(X=X_obs, Beta0=b0, Beta1 = b1, non_z_model="Truncated_Poisson")
+y <- fit[,4]
+hist(y)
+
+```
