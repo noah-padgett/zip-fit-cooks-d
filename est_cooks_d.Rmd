@@ -1,0 +1,59 @@
+---
+title: "Generalized Cook's D"
+author: "R. Noah Padgett"
+date: "4/29/2019"
+output: html_document
+---
+
+Compute the generalized Cook's D statistic for each case.
+This code is taken directly from Beaujean and Morgan (2016).
+
+```{r}
+
+
+# compute generalized Cook's D for zero-inflated models
+g.cooks.zi<-function(model){
+n <- nrow(count.data)
+cooks <- as.matrix(rep(0,nrow(count.data)))
+for (i in 1:n){
+if(model=="ZIP"){
+skip.zip.red <- zeroinfl(skipped ~ male + race + self.con1.m + ses.m +
+achievement.m + college | male + race + self.con1.m + ses.m + achievement.m +
+college, data = count.data[-i,],
+link = "logit", dist = "poisson", trace = TRUE)
+cooks[i]<-t(rbind(as.matrix(skip.zip.red$coefficients$count),
+as.matrix(skip.zip.red$coefficients$zero))-
+rbind(as.matrix(skip.zip$coefficients$count),
+as.matrix(skip.zip$coefficients$zero)))%*%
+(-(skip.zip$optim$hessian))%*%(rbind(
+as.matrix(skip.zip.red$coefficients$count),
+as.matrix(skip.zip.red$coefficients$zero))-
+rbind(as.matrix(skip.zip$coefficients$count),
+as.matrix(skip.zip$coefficients$zero)))
+}
+if(model=="NB"){
+skip.zinb.red <- zeroinfl(skipped ~ male + race + self.con1.m + ses.m +
+achievement.m + college | male + race + self.con1.m + ses.m + achievement.m +
+college, data = count.data[-i,], link = "logit", dist = "negbin", trace = TRUE, EM
+= FALSE)
+cooks[i]<-t(rbind(as.matrix(skip.zinb.red$coefficients$count),
+as.matrix(skip.zinb.red$coefficients$zero),
+as.matrix(skip.zinb.red$theta))-
+rbind(as.matrix(skip.zinb$coefficients$count),
+as.matrix(skip.zinb$coefficients$zero),
+as.matrix(skip.zinb$theta)))%*%
+(-(skip.zinb$optim$hessian))%*%(rbind(
+as.matrix(skip.zinb.red$coefficients$count),
+as.matrix(skip.zinb.red$coefficients$zero),
+as.matrix(skip.zinb.red$theta))-
+rbind(as.matrix(skip.zinb$coefficients$count),
+as.matrix(skip.zinb$coefficients$zero),
+as.matrix(skip.zinb$theta)))
+} 
+}
+
+return(cooks)
+}
+
+
+```
